@@ -1,0 +1,54 @@
+workflow:
+  rules:
+  - if: "$CI_MERGE_REQUEST_IID"
+  - if: "$CI_COMMIT_TAG"
+  - if: "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"
+  
+
+variables:
+  # If your terraform files are in a subdirectory, set TF_ROOT accordingly
+  TF_ROOT: terraform
+
+stages:
+  - plan
+  - infracost
+
+cache:
+  key: "${TF_ROOT}"
+  paths:
+    - ${TF_ROOT}/.terraform
+
+plan:
+  stage: plan
+  image:
+    name: hashicorp/terraform:latest
+    entrypoint: [""]
+  before_script:
+    - cd ${TF_ROOT}
+    - terraform init
+  script: 
+    - terraform plan -out tfplan.binary
+    - terraform show -json tfplan.binary > tplan.json
+  artifacts:
+    paths:
+      - ${TF_ROOT}/tplan.json
+
+infracost:
+  stage: infracost
+  image:
+    name: infracost/infracost:ci-0.10
+    entrypoint: [""] 
+  dependencies:
+    - plan
+  script:
+    - git clone $CI_REPOSITORY_URL --branch=$CI_MERGE_REQUEST_TARGET_BRANCH_NAME --single-branch /tmp/base
+    - ls /tmp/base
+    - infracost configure set api_key $INFRACOST_API_KEY
+    - infracost breakdown --path=/tmp/base/${TF_ROOT} --format=json --out-file=infracost-base.json
+    - INFRACOST_ENABLE_CLOUD=true infracost diff --path=${TF_ROOT} --compare-to=infracost-base.json --format=json --out-file=infracost.json
+    - infracost comment gitlab --path=infracost.json --repo=$CI_PROJECT_PATH --merge-request=$CI_MERGE_REQUEST_IID --gitlab-server-url=$CI_SERVER_URL --gitlab-token=$GITLAB_TOKEN --behavior=update
+
+  variables:
+    INFRACOST_API_KEY: $INFRACOST_API_KEY
+    GITLAB_TOKEN: $GITLAB_TOKEN 
+
